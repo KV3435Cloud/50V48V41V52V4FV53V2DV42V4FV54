@@ -9,7 +9,7 @@ import pytz
 import os
 import sys
 import logging
-from abis import WPHRS_ABI, SWAP_ROUTER_ABI, ERC20_ABI, POOL_ABI, LP_ROUTER_ABI
+from abis import WPHRS_ABI, SWAP_ROUTER_ABI, ERC20_ABI
 from colorama import Fore, Style, init
 
 init()
@@ -28,15 +28,13 @@ class ConfigManager:
     GAS_LIMITS = {
         'APPROVAL': 100000,
         'TRANSFER': 100000,
-        'SWAP': 500000,
-        'LIQUIDITY': 3000000
+        'SWAP': 500000
     }
     GAS_MULTIPLIER = 1.2
     FALLBACK_GAS_PRICE = 20000000000
     
     TOKEN_DECIMALS = 18
     SWAP_PERCENTAGE = 0.5  
-    LIQUIDITY_PERCENTAGE = 0.25  
     SEND_PERCENTAGE = 0.1  
     
     TARGET_ADDRESS_COUNT = 95
@@ -46,13 +44,9 @@ class ConfigManager:
     USDC_TOKEN_ADDRESS = Web3.to_checksum_address("0xad902cf99c2de2f1ba5ec4d642fd7e49cae9ee37")
     USDT_TOKEN_ADDRESS = Web3.to_checksum_address("0xEd59De2D7ad9C043442e381231eE3646FC3C2939")
     SWAP_ROUTER_ADDRESS = Web3.to_checksum_address("0x1a4de519154ae51200b0ad7c90f7fac75547888a")
-    LP_ROUTER_ADDRESS = Web3.to_checksum_address("0xf8a1d4ff0f9b9af7ce58e1fc1833688f3bfd6115")
-    USDC_POOL_ADDRESS = Web3.to_checksum_address("0x0373a059321219745aee4fad8a942cf088be3d0e")
-    USDT_POOL_ADDRESS = Web3.to_checksum_address("0x70118b6eec45329e0534d849bc3e588bb6752527")
 
     TASK_DESCRIPTIONS = {
         101: "Swap",
-        102: "Add Liquidity",
         103: "Send to Friend"
     }
     
@@ -275,8 +269,7 @@ class Web3Manager:
         self.contract_cache['usdc'] = self.web3.eth.contract(address=ConfigManager.USDC_TOKEN_ADDRESS, abi=ERC20_ABI)
         self.contract_cache['usdt'] = self.web3.eth.contract(address=ConfigManager.USDT_TOKEN_ADDRESS, abi=ERC20_ABI)
         self.contract_cache['swapRouter'] = self.web3.eth.contract(address=ConfigManager.SWAP_ROUTER_ADDRESS, abi=SWAP_ROUTER_ABI)
-        self.contract_cache['lpRouter'] = self.web3.eth.contract(address=ConfigManager.LP_ROUTER_ADDRESS, abi=LP_ROUTER_ABI)
-        
+
     def get_contract(self, contract_type):
         return self.contract_cache.get(contract_type)
         
@@ -641,81 +634,6 @@ class TokenManager:
             logger.error(f"Error in swap_to_phrs: {e}")
             return False
 
-class LiquidityManager:
-    def __init__(self, web3_manager, token_manager):
-        self.web3_manager = web3_manager
-        self.token_manager = token_manager
-        self.web3 = web3_manager.web3
-
-    def add_liquidity(self, private_key, wallet_address, pool_address, token0_amount_wei, token1_amount_wei):
-        try:
-            pool_contract = self.web3.eth.contract(address=pool_address, abi=POOL_ABI)
-            token0_address = pool_contract.functions.token0().call()
-            token1_address = pool_contract.functions.token1().call()
-            fee = pool_contract.functions.fee().call()
-            
-            logger.info(f"Pool Info: {token0_address} / {token1_address}")
-            
-            self.token_manager.approve_token(token0_address, ConfigManager.LP_ROUTER_ADDRESS, token0_amount_wei, private_key, wallet_address)
-            self.token_manager.approve_token(token1_address, ConfigManager.LP_ROUTER_ADDRESS, token1_amount_wei, private_key, wallet_address)
-            
-            lp_router = self.web3_manager.get_contract('lpRouter')
-            
-            deadline = int(time.time()) + (ConfigManager.DEADLINE_MINUTES * 60)
-            params = (
-                token0_address,
-                token1_address,
-                fee,
-                -887270,
-                887270,
-                token0_amount_wei,
-                token1_amount_wei,
-                0,
-                0,
-                wallet_address,
-                deadline
-            )
-            
-            gas_price = self.web3_manager.get_gas_price()
-            gas_limit = ConfigManager.GAS_LIMITS['LIQUIDITY']
-            try:
-                estimated_gas = lp_router.functions.mint(params).estimate_gas({'from': wallet_address})
-                gas_limit = int(estimated_gas * 1.5)
-            except Exception as e:
-                logger.warning(f"Gas estimation failed, using default: {e}")
-            
-            mint_tx = lp_router.functions.mint(params).build_transaction({
-                'from': wallet_address,
-                'nonce': self.web3_manager.get_latest_nonce(wallet_address),
-                'gas': gas_limit,
-                'gasPrice': gas_price,
-                'chainId': self.web3.eth.chain_id,
-                'value': 0
-            })
-            
-            signed_tx = self.web3.eth.account.sign_transaction(mint_tx, private_key)
-            tx_hash = self.web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-            tx_hash_hex = f"0x{tx_hash.hex()}" if not tx_hash.hex().startswith("0x") else tx_hash.hex()
-            
-            logger.info(f"Add Liquidity TX Hash -> {tx_hash_hex}")
-            
-            try:
-                logger.info(f"Waiting for transaction receipt...")
-                tx_receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-                
-                if tx_receipt['status'] == 1:
-                    logger.info(f"Successfully added liquidity!")
-                    return tx_receipt, tx_hash_hex
-                else:
-                    raise Exception(f"Transaction failed (status 0)")
-            except Exception as e:
-                logger.error(f"Transaction failed or timed out: {e}")
-                return None, None
-            
-        except Exception as e:
-            logger.error(f"Failed to add liquidity: {str(e)}")
-            return None, None
-
 class TaskManager:
     def __init__(self):
         self.headers = ConfigManager.HEADERS_TEMPLATE.copy()
@@ -808,7 +726,7 @@ class TaskManager:
                             logger.info(f"Current Task Status:")
                             for task_item in tasks:
                                 task_id = task_item['TaskId']
-                                if task_id in [101, 102, 103]:  
+                                if task_id in [101, 103]:  
                                     complete_times = task_item['CompleteTimes']
                                     description = ConfigManager.TASK_DESCRIPTIONS.get(task_id, "Unknown Task")
                                     logger.info(f"Task {description} | Completed: {complete_times}x")
@@ -864,15 +782,13 @@ class TaskManager:
         return False
 
 class WalletManager:
-    def __init__(self, web3_manager, token_manager, liquidity_manager, task_manager):
+    def __init__(self, web3_manager, token_manager, task_manager):
         self.web3_manager = web3_manager
         self.token_manager = token_manager
-        self.liquidity_manager = liquidity_manager
         self.task_manager = task_manager
         self.web3 = web3_manager.web3
         self.transaction_counts = {
             'swap': 0,
-            'liquidity': 0,
             'send': 0
         }
 
@@ -883,7 +799,6 @@ class WalletManager:
         try:
             balance_wei = self.web3.eth.get_balance(account.address)
             balance_eth = self.web3.from_wei(balance_wei, 'ether')
-            # logger.info(f"Balance: {balance_eth:.6f} {ConfigManager.TOKEN_COLORS['PHRS']}PHRS{Style.RESET_ALL}")
             
             if balance_eth < ConfigManager.MIN_PHRS_BALANCE:
                 logger.warning(f"PHRS balance below minimum ({ConfigManager.MIN_PHRS_BALANCE}). Attempting recovery...")
@@ -902,10 +817,6 @@ class WalletManager:
             usdc_balance_wei, usdc_balance = self.web3_manager.get_token_balance(ConfigManager.USDC_TOKEN_ADDRESS, account.address)
             usdt_balance_wei, usdt_balance = self.web3_manager.get_token_balance(ConfigManager.USDT_TOKEN_ADDRESS, account.address)
             
-            # logger.info(f"WPHRS Balance: {wphrs_balance:.6f} {ConfigManager.TOKEN_COLORS['WPHRS']}WPHRS{Style.RESET_ALL}")
-            # logger.info(f"USDC Balance: {usdc_balance:.6f} {ConfigManager.TOKEN_COLORS['USDC']}USDC{Style.RESET_ALL}")
-            # logger.info(f"USDT Balance: {usdt_balance:.6f} {ConfigManager.TOKEN_COLORS['USDT']}USDT{Style.RESET_ALL}")
-            
             logger.info(f"Balance Summary")
             logger.info(f"PHRS  : {balance_eth:.6f} PHRS{Style.RESET_ALL}")
             logger.info(f"wPHRS : {wphrs_balance:.6f} WPHRS{Style.RESET_ALL}")
@@ -915,11 +826,11 @@ class WalletManager:
             required_wphrs = 0
             if self.transaction_counts['swap'] > 0:
                 required_wphrs += wphrs_balance * ConfigManager.SWAP_PERCENTAGE * self.transaction_counts['swap']
-            if self.transaction_counts['liquidity'] > 0:
-                required_wphrs += wphrs_balance * ConfigManager.LIQUIDITY_PERCENTAGE * self.transaction_counts['liquidity']
             if self.transaction_counts['send'] > 0:
                 required_wphrs += wphrs_balance * ConfigManager.SEND_PERCENTAGE * self.transaction_counts['send']
-
+                
+            logger.info(f"Required WPHRS: {required_wphrs:.6f}")
+            
             if wphrs_balance < required_wphrs and balance_eth > ConfigManager.MIN_PHRS_BALANCE + 0.1:
                 wrap_amount_wei = int((balance_eth - ConfigManager.MIN_PHRS_BALANCE) * 0.5 * 10**18)
                 logger.info(f"WPHRS balance insufficient. Wrapping {float(wrap_amount_wei) / 10**18:.6f} PHRS to WPHRS...")
@@ -933,9 +844,6 @@ class WalletManager:
                         logger.info("Successfully wrapped PHRS to WPHRS")
                 except Exception as e:
                     logger.error(f"Failed to wrap PHRS: {e}")
-            else:
-                # logger.info("WPHRS balance sufficient or PHRS balance too low to wrap")
-                pass
 
             wphrs_balance_wei, wphrs_balance = self.web3_manager.get_token_balance(ConfigManager.WPHRS_CONTRACT_ADDRESS, account.address)
             usdc_balance_wei, usdc_balance = self.web3_manager.get_token_balance(ConfigManager.USDC_TOKEN_ADDRESS, account.address)
@@ -946,15 +854,12 @@ class WalletManager:
                 operations.append('swap')
                 if to_addresses:
                     operations.append('send')
-            if usdc_balance > 0.000001:
-                operations.append('liquidity')
             
             if not operations:
                 logger.warning(f"No available operations to perform - insufficient balances")
                 return
 
-            # logger.info(f"Available operations: {', '.join(operations)}")
-            logger.info(f"Transaction counts: SWAP : {self.transaction_counts['swap']} | LIQUIDITY : {self.transaction_counts['liquidity']} | SEND : {self.transaction_counts['send']}")
+            logger.info(f"Transaction counts: SWAP : {self.transaction_counts['swap']} | SEND : {self.transaction_counts['send']}")
             
             if 'swap' in operations and self.transaction_counts['swap'] > 0:
                 logger.info(f"Processing {self.transaction_counts['swap']} SWAP transactions...")
@@ -987,38 +892,10 @@ class WalletManager:
                         
                     time.sleep(ConfigManager.TRANSACTION_SETTINGS['TRANSACTION_DELAY'])
 
-            if 'liquidity' in operations and self.transaction_counts['liquidity'] > 0:
-                logger.info(f"Processing {self.transaction_counts['liquidity']} ADD LIQUIDITY transactions...")
-                for i in range(self.transaction_counts['liquidity']):
-                    if wphrs_balance <= 0.000001 or usdc_balance <= 0.000001:
-                        logger.warning("Insufficient balance for adding liquidity")
-                        break
-                        
-                    logger.info(f"ADD LIQUIDITY transaction {i+1}/{self.transaction_counts['liquidity']}")
-                    try:
-                        amount0_wei = int(wphrs_balance_wei * ConfigManager.LIQUIDITY_PERCENTAGE)
-                        amount1_wei = int(usdc_balance_wei * ConfigManager.LIQUIDITY_PERCENTAGE)
-                        receipt, tx_hash = self.liquidity_manager.add_liquidity(
-                            account.key,
-                            account.address,
-                            ConfigManager.USDC_POOL_ADDRESS,
-                            amount0_wei,
-                            amount1_wei
-                        )
-                        if receipt:
-                            logger.info(f"ADD LIQUIDITY transaction {i+1}/{self.transaction_counts['liquidity']} completed")
-                    except Exception as e:
-                        logger.error(f"ADD LIQUIDITY failed: {e}")
-                        break
-                        
-                    wphrs_balance_wei, wphrs_balance = self.web3_manager.get_token_balance(ConfigManager.WPHRS_CONTRACT_ADDRESS, account.address)
-                    usdc_balance_wei, usdc_balance = self.web3_manager.get_token_balance(ConfigManager.USDC_TOKEN_ADDRESS, account.address)
-                    time.sleep(ConfigManager.TRANSACTION_SETTINGS['TRANSACTION_DELAY'])
-
             if 'send' in operations and self.transaction_counts['send'] > 0:
                 logger.info(f"Processing {self.transaction_counts['send']} SEND transactions...")
                 for i in range(self.transaction_counts['send']):
-                    if wphrs_balance <= 0.000001 or not to_addresses:
+                    if balance_eth <= 0.000001 or not to_addresses:
                         logger.warning("Insufficient WPHRS balance or no more addresses to send to")
                         break
                         
@@ -1088,17 +965,14 @@ class MainBot:
     def __init__(self):
         self.web3_manager = Web3Manager()
         self.token_manager = TokenManager(self.web3_manager)
-        self.liquidity_manager = LiquidityManager(self.web3_manager, self.token_manager)
         self.task_manager = TaskManager()
         self.wallet_manager = WalletManager(
             self.web3_manager,
             self.token_manager,
-            self.liquidity_manager,
             self.task_manager
         )
         self.transaction_counts = {
             'swap': 0,
-            'liquidity': 0,
             'send': 0
         }
 
@@ -1115,15 +989,6 @@ class MainBot:
 
         while True:
             try:
-                liquidity_count = int(input(f"{Fore.GREEN}LIQUIDITY count (0-100): {Style.RESET_ALL}"))
-                if 0 <= liquidity_count <= 100:
-                    break
-                print(f"{Fore.RED}Enter 0-100{Style.RESET_ALL}")
-            except ValueError:
-                print(f"{Fore.RED}Invalid number{Style.RESET_ALL}")
-
-        while True:
-            try:
                 send_count = int(input(f"{Fore.GREEN}SEND count (0-100): {Style.RESET_ALL}"))
                 if 0 <= send_count <= 100:
                     break
@@ -1133,13 +998,12 @@ class MainBot:
 
         self.transaction_counts = {
             'swap': swap_count,
-            'liquidity': liquidity_count,
             'send': send_count
         }
         
         total_transactions = sum(self.transaction_counts.values())
         print(f"{Fore.CYAN}Total transactions to perform: {total_transactions}{Style.RESET_ALL}")
-        print(f"{Fore.GREEN}SWAP: {swap_count}{Style.RESET_ALL} | {Fore.GREEN}LIQUIDITY: {liquidity_count}{Style.RESET_ALL} | {Fore.GREEN}SEND: {send_count}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}SWAP: {swap_count}{Style.RESET_ALL} | {Fore.GREEN}SEND: {send_count}{Style.RESET_ALL}")
         
         confirm = input(f"{Fore.YELLOW}Confirm these settings? (y/n): {Style.RESET_ALL}").lower()
         if confirm != 'y':
