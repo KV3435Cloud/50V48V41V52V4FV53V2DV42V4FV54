@@ -11,6 +11,7 @@ import sys
 import logging
 from abis import WPHRS_ABI, SWAP_ROUTER_ABI, ERC20_ABI
 from colorama import Fore, Style, init
+import json
 
 init()
 
@@ -35,7 +36,6 @@ class ConfigManager:
     
     TOKEN_DECIMALS = 18
     SWAP_PERCENTAGE = 0.5  
-    SEND_PERCENTAGE = 0.1  
     
     TARGET_ADDRESS_COUNT = 95
     BASE_ADDRESS = '0xf8a1d4ff0f9b9af7ce58e1fc1833688f3bfd6115'
@@ -70,9 +70,9 @@ class ConfigManager:
     }
     
     TRANSACTION_SETTINGS = {
-        'TRANSACTION_DELAY': 2,  
+        'TRANSACTION_DELAY': 2,
         'VERIFICATION_RETRIES': 10,
-        'VERIFICATION_DELAY': 10  
+        'VERIFICATION_DELAY': 10
     }
     
     LOGGING_CONFIG = {
@@ -95,7 +95,8 @@ class ConfigManager:
         'MAX_PAGES': 10
     }
 
-    MIN_PHRS_BALANCE = 0.05
+    MIN_PHRS_BALANCE = 0.5
+    MINIMUM_WPHRS = 0.5
     
     TOKEN_COLORS = {
         'USDC': Fore.LIGHTRED_EX,
@@ -527,6 +528,105 @@ class TokenManager:
             logger.error(f"Wrap error: {e}")
             raise
 
+    def request_faucet_tokens(self, wallet_address):
+        try:
+            url = "https://testnet-router.zenithswap.xyz/api/v1/faucet"
+            headers = {
+                'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0",
+                'Accept-Encoding': "gzip, deflate, br, zstd",
+                'Content-Type': "application/json",
+                'sec-ch-ua-platform': "\"Windows\"",
+                'sec-ch-ua': "\"Chromium\";v=\"136\", \"Microsoft Edge\";v=\"136\", \"Not.A/Brand\";v=\"99\"",
+                'sec-ch-ua-mobile': "?0",
+                'origin': "https://testnet.zenithswap.xyz",
+                'sec-fetch-site': "same-site",
+                'sec-fetch-mode': "cors",
+                'sec-fetch-dest': "empty",
+                'referer': "https://testnet.zenithswap.xyz/",
+                'accept-language': "en-US,en;q=0.9,id;q=0.8",
+                'priority': "u=1, i"
+            }
+
+            usdc_payload = {
+                "tokenAddress": ConfigManager.USDC_TOKEN_ADDRESS,
+                "userAddress": wallet_address
+            }
+            logger.info("Requesting USDC from faucet...")
+            usdc_response = requests.post(url, data=json.dumps(usdc_payload), headers=headers)
+            if usdc_response.status_code == 200:
+                logger.info("Successfully requested USDC from faucet")
+            else:
+                logger.warning(f"Failed to request USDC from faucet: {usdc_response.text}")
+
+            time.sleep(2)
+
+            usdt_payload = {
+                "tokenAddress": ConfigManager.USDT_TOKEN_ADDRESS,
+                "userAddress": wallet_address
+            }
+            logger.info("Requesting USDT from faucet...")
+            usdt_response = requests.post(url, data=json.dumps(usdt_payload), headers=headers)
+            if usdt_response.status_code == 200:
+                logger.info("Successfully requested USDT from faucet")
+            else:
+                logger.warning(f"Failed to request USDT from faucet: {usdt_response.text}")
+
+            time.sleep(2)
+
+        except Exception as e:
+            logger.error(f"Error requesting faucet tokens: {e}")
+
+    def request_phrs_faucet(self, wallet_address, jwt_token):
+        try:
+            base_url = "https://api.pharosnetwork.xyz"
+            headers = {
+                'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0",
+                'Accept-Encoding': "gzip, deflate, br, zstd",
+                'Content-Type': "application/json",
+                'sec-ch-ua-platform': "\"Windows\"",
+                'sec-ch-ua': "\"Chromium\";v=\"136\", \"Microsoft Edge\";v=\"136\", \"Not.A/Brand\";v=\"99\"",
+                'sec-ch-ua-mobile': "?0",
+                'origin': "https://testnet.pharosnetwork.xyz",
+                'sec-fetch-site': "same-site",
+                'sec-fetch-mode': "cors",
+                'sec-fetch-dest': "empty",
+                'referer': "https://testnet.pharosnetwork.xyz/",
+                'accept-language': "en-US,en;q=0.9,id;q=0.8",
+                'priority': "u=1, i",
+                'authorization': f"Bearer {jwt_token}"
+            }
+
+            status_url = f"{base_url}/faucet/status?address={wallet_address}"
+            logger.info("Checking PHRS faucet status...")
+            status_response = requests.get(status_url, headers=headers)
+            
+            if status_response.status_code == 200:
+                status_data = status_response.json()
+                if status_data.get("code") == 0 and status_data.get("data", {}).get("is_able_to_faucet", False):
+                    faucet_url = f"{base_url}/faucet/daily?address={wallet_address}"
+                    logger.info("Requesting PHRS from faucet...")
+                    faucet_response = requests.post(faucet_url, headers=headers)
+                    
+                    if faucet_response.status_code == 200:
+                        faucet_data = faucet_response.json()
+                        if faucet_data.get("code") == 0:
+                            logger.info("Successfully requested PHRS from faucet")
+                            return True
+                        else:
+                            logger.warning(f"Failed to request PHRS from faucet: {faucet_data.get('msg')}")
+                    else:
+                        logger.warning(f"Failed to request PHRS from faucet: {faucet_response.text}")
+                else:
+                    logger.info("PHRS faucet not available yet")
+            else:
+                logger.warning(f"Failed to check PHRS faucet status: {status_response.text}")
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error requesting PHRS faucet: {e}")
+            return False
+
     def perform_random_swap(self, private_key, wallet_address):
         try:
             phrs_balance_wei = self.web3.eth.get_balance(wallet_address)
@@ -576,63 +676,6 @@ class TokenManager:
         except Exception as e:
             logger.error(f"swap error: {e}")
             raise
-
-    def swap_to_phrs(self, private_key, wallet_address):
-        try:
-            wphrs_balance_wei, wphrs_balance = self.web3_manager.get_token_balance(ConfigManager.WPHRS_CONTRACT_ADDRESS, wallet_address)
-            usdc_balance_wei, usdc_balance = self.web3_manager.get_token_balance(ConfigManager.USDC_TOKEN_ADDRESS, wallet_address)
-            usdt_balance_wei, usdt_balance = self.web3_manager.get_token_balance(ConfigManager.USDT_TOKEN_ADDRESS, wallet_address)
-
-            if wphrs_balance > 0.000001:
-                logger.info(f"Attempting to unwrap WPHRS to PHRS...")
-                try:
-                    unwrap_amount_wei = wphrs_balance_wei
-                    tx_data = '0x2e1a7d4d' + hex(unwrap_amount_wei)[2:].zfill(64)
-                    tx = {
-                        'from': wallet_address,
-                        'to': ConfigManager.WPHRS_CONTRACT_ADDRESS,
-                        'nonce': self.web3_manager.get_latest_nonce(wallet_address),
-                        'gas': ConfigManager.GAS_LIMITS['TRANSFER'],
-                        'gasPrice': self.web3_manager.get_gas_price(),
-                        'chainId': self.web3.eth.chain_id,
-                        'value': 0,
-                        'data': tx_data
-                    }
-                    signed_tx = self.web3.eth.account.sign_transaction(tx, private_key)
-                    tx_hash = self.web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-                    receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=300)
-                    if receipt['status'] == 1:
-                        logger.info("Successfully unwrapped WPHRS to PHRS")
-                        return True
-                except Exception as e:
-                    logger.error(f"Failed to unwrap WPHRS: {e}")
-
-            if usdc_balance > 0.000001:
-                logger.info(f"Attempting to swap USDC to PHRS...")
-                try:
-                    amount = usdc_balance * 0.9
-                    tx_hash, _, _ = self.swap_tokens_exact_input(amount, 'USDC', 'PHRS', private_key, wallet_address)
-                    if tx_hash:
-                        logger.info("Successfully swapped USDC to PHRS")
-                        return True
-                except Exception as e:
-                    logger.error(f"Failed to swap USDC to PHRS: {e}")
-
-            if usdt_balance > 0.000001:
-                logger.info(f"Attempting to swap USDT to PHRS...")
-                try:
-                    amount = usdt_balance * 0.9
-                    tx_hash, _, _ = self.swap_tokens_exact_input(amount, 'USDT', 'PHRS', private_key, wallet_address)
-                    if tx_hash:
-                        logger.info("Successfully swapped USDT to PHRS")
-                        return True
-                except Exception as e:
-                    logger.error(f"Failed to swap USDT to PHRS: {e}")
-
-            return False
-        except Exception as e:
-            logger.error(f"Error in swap_to_phrs: {e}")
-            return False
 
 class TaskManager:
     def __init__(self):
@@ -801,17 +844,14 @@ class WalletManager:
             balance_eth = self.web3.from_wei(balance_wei, 'ether')
             
             if balance_eth < ConfigManager.MIN_PHRS_BALANCE:
-                logger.warning(f"PHRS balance below minimum ({ConfigManager.MIN_PHRS_BALANCE}). Attempting recovery...")
-                if self.token_manager.swap_to_phrs(account.key, account.address):
-                    balance_wei = self.web3.eth.get_balance(account.address)
-                    balance_eth = self.web3.from_wei(balance_wei, 'ether')
-                    if balance_eth < ConfigManager.MIN_PHRS_BALANCE:
-                        logger.warning(f"Recovery failed. PHRS balance still below minimum. Skipping operations.")
-                        return
-                    logger.info(f"Recovery successful. New PHRS balance: {balance_eth:.6f}")
-                else:
-                    logger.warning(f"Recovery failed. Skipping operations.")
-                    return
+                logger.warning(f"PHRS balance below minimum ({ConfigManager.MIN_PHRS_BALANCE}). Skipping operations.")
+                return
+
+            self.request_faucet_tokens(account.address)
+            
+            if jwt_token:
+                logger.info("Requesting PHRS from faucet...")
+                self.request_phrs_faucet(account.address, jwt_token)
 
             wphrs_balance_wei, wphrs_balance = self.web3_manager.get_token_balance(ConfigManager.WPHRS_CONTRACT_ADDRESS, account.address)
             usdc_balance_wei, usdc_balance = self.web3_manager.get_token_balance(ConfigManager.USDC_TOKEN_ADDRESS, account.address)
@@ -823,34 +863,33 @@ class WalletManager:
             logger.info(f"USDC  : {usdc_balance:.6f} USDC{Style.RESET_ALL}")
             logger.info(f"USDT  : {usdt_balance:.6f} USDT{Style.RESET_ALL}")
 
-            required_wphrs = 0
-            if self.transaction_counts['swap'] > 0:
-                required_wphrs += wphrs_balance * ConfigManager.SWAP_PERCENTAGE * self.transaction_counts['swap']
-            if self.transaction_counts['send'] > 0:
-                required_wphrs += wphrs_balance * ConfigManager.SEND_PERCENTAGE * self.transaction_counts['send']
-                
-            logger.info(f"Required WPHRS: {required_wphrs:.6f}")
-            
-            if wphrs_balance < required_wphrs and balance_eth > ConfigManager.MIN_PHRS_BALANCE + 0.1:
-                wrap_amount_wei = int((balance_eth - ConfigManager.MIN_PHRS_BALANCE) * 0.5 * 10**18)
-                logger.info(f"WPHRS balance insufficient. Wrapping {float(wrap_amount_wei) / 10**18:.6f} PHRS to WPHRS...")
-                try:
-                    receipt, tx_hash = self.token_manager.wrap_phrs(
-                        wrap_amount_wei,
-                        account.key,
-                        account.address
-                    )
-                    if receipt:
-                        logger.info("Successfully wrapped PHRS to WPHRS")
-                except Exception as e:
-                    logger.error(f"Failed to wrap PHRS: {e}")
+            if self.transaction_counts['swap'] > 0 or self.transaction_counts['send'] > 0:
+                if wphrs_balance < ConfigManager.MINIMUM_WPHRS:
+                    if balance_eth > ConfigManager.MIN_PHRS_BALANCE:
+                        wrap_amount_wei = int(balance_eth * 0.5 * 10**18)
+                        logger.info(f"WPHRS balance below minimum. Wrapping {float(wrap_amount_wei) / 10**18:.6f} PHRS to WPHRS...")
+                        try:
+                            receipt, tx_hash = self.token_manager.wrap_phrs(
+                                wrap_amount_wei,
+                                account.key,
+                                account.address
+                            )
+                            if receipt:
+                                logger.info("Successfully wrapped PHRS to WPHRS")
+                                time.sleep(ConfigManager.TRANSACTION_SETTINGS['TRANSACTION_DELAY'])
+                        except Exception as e:
+                            logger.error(f"Failed to wrap PHRS: {e}")
+                            return
+                    else:
+                        logger.warning(f"Insufficient PHRS balance to wrap. Need at least {ConfigManager.MIN_PHRS_BALANCE} PHRS")
+                        return
 
             wphrs_balance_wei, wphrs_balance = self.web3_manager.get_token_balance(ConfigManager.WPHRS_CONTRACT_ADDRESS, account.address)
             usdc_balance_wei, usdc_balance = self.web3_manager.get_token_balance(ConfigManager.USDC_TOKEN_ADDRESS, account.address)
             usdt_balance_wei, usdt_balance = self.web3_manager.get_token_balance(ConfigManager.USDT_TOKEN_ADDRESS, account.address)
 
             operations = []
-            if wphrs_balance > 0.000001:
+            if wphrs_balance > ConfigManager.MINIMUM_WPHRS:
                 operations.append('swap')
                 if to_addresses:
                     operations.append('send')
@@ -867,17 +906,8 @@ class WalletManager:
                     balance_wei = self.web3.eth.get_balance(account.address)
                     balance_eth = self.web3.from_wei(balance_wei, 'ether')
                     if balance_eth < ConfigManager.MIN_PHRS_BALANCE:
-                        logger.warning(f"PHRS balance below minimum during swaps. Attempting recovery...")
-                        if self.token_manager.swap_to_phrs(account.key, account.address):
-                            balance_wei = self.web3.eth.get_balance(account.address)
-                            balance_eth = self.web3.from_wei(balance_wei, 'ether')
-                            if balance_eth < ConfigManager.MIN_PHRS_BALANCE:
-                                logger.warning(f"Recovery failed. Stopping swaps.")
-                                break
-                            logger.info(f"Recovery successful. New PHRS balance: {balance_eth:.6f}")
-                        else:
-                            logger.warning(f"Recovery failed. Stopping swaps.")
-                            break
+                        logger.warning(f"PHRS balance below minimum during swaps. Stopping swaps.")
+                        break
 
                     logger.info(f"SWAP transaction {i+1}/{self.transaction_counts['swap']}")
                     try:
@@ -901,7 +931,8 @@ class WalletManager:
                         
                     to_address = random.choice(to_addresses)
                     to_addresses.remove(to_address)
-                    amount_to_send = wphrs_balance * ConfigManager.SEND_PERCENTAGE
+                    send_percentage = random.uniform(0.01, 0.05)
+                    amount_to_send = wphrs_balance * send_percentage
                     amount_to_send_wei = int(amount_to_send * 10**ConfigManager.TOKEN_DECIMALS)
                     logger.info(f"SEND transaction {i+1}/{self.transaction_counts['send']}: {amount_to_send:.6f} WPHRS to {to_address}")
                     
@@ -960,6 +991,12 @@ class WalletManager:
         except Exception as e:
             logger.error(f"Wallet error: {e}")
             raise
+
+    def request_faucet_tokens(self, wallet_address):
+        self.token_manager.request_faucet_tokens(wallet_address)
+
+    def request_phrs_faucet(self, wallet_address, jwt_token):
+        self.token_manager.request_phrs_faucet(wallet_address, jwt_token)
 
 class MainBot:
     def __init__(self):
