@@ -932,9 +932,9 @@ class WalletManager:
                     to_address = random.choice(to_addresses)
                     to_addresses.remove(to_address)
                     send_percentage = random.uniform(0.01, 0.05)
-                    amount_to_send = wphrs_balance * send_percentage
+                    amount_to_send = float(balance_eth) * send_percentage
                     amount_to_send_wei = int(amount_to_send * 10**ConfigManager.TOKEN_DECIMALS)
-                    logger.info(f"SEND transaction {i+1}/{self.transaction_counts['send']}: {amount_to_send:.6f} WPHRS to {to_address}")
+                    logger.info(f"SEND transaction {i+1}/{self.transaction_counts['send']}: {amount_to_send:.6f} PHRS to {to_address}")
                     
                     try:
                         receipt, tx_hash = self.token_manager.transfer_token(
