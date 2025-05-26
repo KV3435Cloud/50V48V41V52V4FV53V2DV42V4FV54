@@ -12,6 +12,9 @@ import logging
 from abis import WPHRS_ABI, SWAP_ROUTER_ABI, ERC20_ABI
 from colorama import Fore, Style, init
 import json
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 init()
 
@@ -220,7 +223,7 @@ def get_to_addresses(wallet_index=1):
                     'page': str(page),
                     'address': address
                 }
-                response = requests.get(base_url, params=params, headers=headers, timeout=30)
+                response = requests.get(base_url, params=params, headers=headers, timeout=30, verify=False)
                 if response.status_code in (200, 201):
                     data = response.json()
                     transactions = data.get("data", [])
@@ -261,7 +264,11 @@ def get_to_addresses(wallet_index=1):
 
 class Web3Manager:
     def __init__(self):
-        self.web3 = Web3(Web3.HTTPProvider(ConfigManager.RPC_URL))
+        provider = Web3.HTTPProvider(
+            ConfigManager.RPC_URL,
+            request_kwargs={'verify': False}
+        )
+        self.web3 = Web3(provider)
         self.contract_cache = {}
         self._init_contracts()
         
@@ -552,7 +559,7 @@ class TokenManager:
                 "userAddress": wallet_address
             }
             logger.info("Requesting USDC from faucet...")
-            usdc_response = requests.post(url, data=json.dumps(usdc_payload), headers=headers)
+            usdc_response = requests.post(url, data=json.dumps(usdc_payload), headers=headers, verify=False)
             if usdc_response.status_code == 200:
                 logger.info("Successfully requested USDC from faucet")
             else:
@@ -565,7 +572,7 @@ class TokenManager:
                 "userAddress": wallet_address
             }
             logger.info("Requesting USDT from faucet...")
-            usdt_response = requests.post(url, data=json.dumps(usdt_payload), headers=headers)
+            usdt_response = requests.post(url, data=json.dumps(usdt_payload), headers=headers, verify=False)
             if usdt_response.status_code == 200:
                 logger.info("Successfully requested USDT from faucet")
             else:
@@ -598,14 +605,14 @@ class TokenManager:
 
             status_url = f"{base_url}/faucet/status?address={wallet_address}"
             logger.info("Checking PHRS faucet status...")
-            status_response = requests.get(status_url, headers=headers)
+            status_response = requests.get(status_url, headers=headers, verify=False)
             
             if status_response.status_code == 200:
                 status_data = status_response.json()
                 if status_data.get("code") == 0 and status_data.get("data", {}).get("is_able_to_faucet", False):
                     faucet_url = f"{base_url}/faucet/daily?address={wallet_address}"
                     logger.info("Requesting PHRS from faucet...")
-                    faucet_response = requests.post(faucet_url, headers=headers)
+                    faucet_response = requests.post(faucet_url, headers=headers, verify=False)
                     
                     if faucet_response.status_code == 200:
                         faucet_data = faucet_response.json()
@@ -634,7 +641,10 @@ class TokenManager:
             usdc_balance_wei, usdc_balance = self.web3_manager.get_token_balance(ConfigManager.USDC_TOKEN_ADDRESS, wallet_address)
             usdt_balance_wei, usdt_balance = self.web3_manager.get_token_balance(ConfigManager.USDT_TOKEN_ADDRESS, wallet_address)
 
-            phrs_balance_eth = float(phrs_balance_wei) / 10**18
+            phrs_balance_eth = float(self.web3.from_wei(phrs_balance_wei, 'ether'))
+            wphrs_balance = float(wphrs_balance)
+            usdc_balance = float(usdc_balance)
+            usdt_balance = float(usdt_balance)
 
             available_pairs = []
             for pair_config in ConfigManager.TOKEN_PAIRS:
@@ -660,13 +670,13 @@ class TokenManager:
             amount_to_swap = 0
             if token_in_symbol == 'PHRS':
                 available_phrs_to_swap = phrs_balance_eth - ConfigManager.MIN_PHRS_BALANCE
-                amount_to_swap = available_phrs_to_swap * ConfigManager.SWAP_PERCENTAGE
+                amount_to_swap = float(available_phrs_to_swap * ConfigManager.SWAP_PERCENTAGE)
             elif token_in_symbol == 'WPHRS':
-                amount_to_swap = wphrs_balance * ConfigManager.SWAP_PERCENTAGE
+                amount_to_swap = float(wphrs_balance * ConfigManager.SWAP_PERCENTAGE)
             elif token_in_symbol == 'USDC':
-                amount_to_swap = usdc_balance * ConfigManager.SWAP_PERCENTAGE
+                amount_to_swap = float(usdc_balance * ConfigManager.SWAP_PERCENTAGE)
             elif token_in_symbol == 'USDT':
-                amount_to_swap = usdt_balance * ConfigManager.SWAP_PERCENTAGE
+                amount_to_swap = float(usdt_balance * ConfigManager.SWAP_PERCENTAGE)
 
             token_in_color = ConfigManager.TOKEN_COLORS.get(token_in_symbol, Fore.WHITE)
             token_out_color = ConfigManager.TOKEN_COLORS.get(token_out_symbol, Fore.WHITE)
@@ -688,7 +698,7 @@ class TaskManager:
 
         for attempt in range(1, ConfigManager.MAX_RETRIES + 1):
             try:
-                response = requests.get(url, headers=headers, timeout=30)
+                response = requests.get(url, headers=headers, timeout=30, verify=False)
                 if response.status_code in (200, 201):
                     data = response.json()
                     if data.get("code") == 0:
@@ -717,7 +727,7 @@ class TaskManager:
         url = f"{ConfigManager.BASE_URL}{ConfigManager.ENDPOINTS['LOGIN']}?address={address}&signature={signature}"
         for attempt in range(1, ConfigManager.MAX_RETRIES + 1):
             try:
-                response = requests.post(url, headers=self.headers, timeout=30)
+                response = requests.post(url, headers=self.headers, timeout=30, verify=False)
                 if response.status_code in (200, 201):
                     data = response.json()
                     if data.get("code") == 0:
@@ -740,7 +750,7 @@ class TaskManager:
 
         for attempt in range(1, ConfigManager.MAX_RETRIES + 1):
             try:
-                response = requests.post(url, params=params, headers=headers, timeout=30)
+                response = requests.post(url, params=params, headers=headers, timeout=30, verify=False)
                 if response.status_code in (200, 201):
                     return response.json()
                 else:
@@ -760,7 +770,7 @@ class TaskManager:
 
         for attempt in range(1, ConfigManager.MAX_RETRIES + 1):
             try:
-                response = requests.get(url, headers=headers, timeout=30)
+                response = requests.get(url, headers=headers, timeout=30, verify=False)
                 if response.status_code in (200, 201):
                     data = response.json()
                     if data.get("code") == 0:
@@ -791,7 +801,7 @@ class TaskManager:
 
         for attempt in range(1, ConfigManager.MAX_RETRIES + 1):
             try:
-                response = requests.post(url, headers=headers, timeout=30)
+                response = requests.post(url, headers=headers, timeout=30, verify=False)
                 if response.status_code in (200, 201):
                     data = response.json()
                     verified = data.get("data", {}).get("verified", False)
@@ -805,7 +815,7 @@ class TaskManager:
                         verify_retries += 1
                         time.sleep(ConfigManager.TRANSACTION_SETTINGS['VERIFICATION_DELAY'])
                         
-                        retry_response = requests.post(url, headers=headers, timeout=30)
+                        retry_response = requests.post(url, headers=headers, timeout=30, verify=False)
                         if retry_response.status_code in (200, 201):
                             retry_data = retry_response.json()
                             verified = retry_data.get("data", {}).get("verified", False)
@@ -841,7 +851,7 @@ class WalletManager:
     def _process_wallet_operations(self, account, to_addresses, jwt_token=None):
         try:
             balance_wei = self.web3.eth.get_balance(account.address)
-            balance_eth = self.web3.from_wei(balance_wei, 'ether')
+            balance_eth = float(self.web3.from_wei(balance_wei, 'ether'))
             
             if balance_eth < ConfigManager.MIN_PHRS_BALANCE:
                 logger.warning(f"PHRS balance below minimum ({ConfigManager.MIN_PHRS_BALANCE}). Skipping operations.")
@@ -856,6 +866,10 @@ class WalletManager:
             wphrs_balance_wei, wphrs_balance = self.web3_manager.get_token_balance(ConfigManager.WPHRS_CONTRACT_ADDRESS, account.address)
             usdc_balance_wei, usdc_balance = self.web3_manager.get_token_balance(ConfigManager.USDC_TOKEN_ADDRESS, account.address)
             usdt_balance_wei, usdt_balance = self.web3_manager.get_token_balance(ConfigManager.USDT_TOKEN_ADDRESS, account.address)
+
+            wphrs_balance = float(wphrs_balance)
+            usdc_balance = float(usdc_balance)
+            usdt_balance = float(usdt_balance)
             
             logger.info(f"Balance Summary")
             logger.info(f"PHRS  : {balance_eth:.6f} PHRS{Style.RESET_ALL}")
@@ -904,7 +918,7 @@ class WalletManager:
                 logger.info(f"Processing {self.transaction_counts['swap']} SWAP transactions...")
                 for i in range(self.transaction_counts['swap']):
                     balance_wei = self.web3.eth.get_balance(account.address)
-                    balance_eth = self.web3.from_wei(balance_wei, 'ether')
+                    balance_eth = float(self.web3.from_wei(balance_wei, 'ether'))
                     if balance_eth < ConfigManager.MIN_PHRS_BALANCE:
                         logger.warning(f"PHRS balance below minimum during swaps. Stopping swaps.")
                         break
